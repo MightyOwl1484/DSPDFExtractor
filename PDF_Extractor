@@ -1,0 +1,183 @@
+import os
+import PyPDF2
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+from fnmatch import fnmatch
+import pandas as pd
+
+
+class PDFtoExcelConverter(tk.Tk):
+    def __init__(self):
+        super().__init__()
+
+        self.pdf_paths = []
+        self.excel_file = None
+        self.output_excel_path = ""
+
+        self.title("PDF Form Fields Extractor")
+        self.geometry("800x600")
+
+        tk.Label(
+            self, text="Dave Shoe's PDF Form Fields Extractor", font=("Helvetica", 16)
+        ).pack(pady=20)
+        tk.Button(
+            self, text="Select PDF File or Folder", command=self.load_pdf_fields
+        ).pack(pady=5)
+
+        self.field_entry_label = tk.Label(
+            self, text="Enter field names (use '%' as wildcard):"
+        )
+        self.field_entry_label.pack(pady=5)
+
+        self.field_entry = tk.Entry(self, width=40)
+        self.field_entry.pack(pady=5)
+
+        tk.Button(
+            self, text="Extract Fields & Write to Excel", command=self.extract_fields
+        ).pack(pady=5)
+        tk.Button(self, text="Create Excel File", command=self.create_excel_file).pack(
+            pady=5
+        )
+        tk.Button(
+            self, text="Save & Close Excel File", command=self.save_excel_file
+        ).pack(pady=5)
+
+        self.text_widget = scrolledtext.ScrolledText(
+            self, wrap=tk.WORD, width=40, height=10, font=("Times New Roman", 12)
+        )
+        self.text_widget.pack(pady=10)
+        self.text_widget.insert(
+            tk.INSERT, "Form fields and values will be displayed here."
+        )
+        self.text_widget.configure(state="disabled")
+
+    def load_pdf_fields(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
+        )
+        if not file_path:
+            folder_path = filedialog.askdirectory()
+            if not folder_path:
+                return
+            self.pdf_paths = [
+                os.path.join(folder_path, f)
+                for f in os.listdir(folder_path)
+                if f.lower().endswith(".pdf")
+            ]
+        else:
+            self.pdf_paths = [file_path]
+
+        if self.pdf_paths:
+            messagebox.showinfo(
+                "PDF File(s) Selected", f"Selected {len(self.pdf_paths)} PDF file(s)."
+            )
+            self.list_pdf_fields()
+
+    def list_pdf_fields(self):
+        all_fields = {}
+        for pdf_path in self.pdf_paths:
+            fields = extract_pdf_fields(pdf_path)
+            if fields:
+                all_fields.update(fields)
+
+        if all_fields:
+            self.text_widget.configure(state="normal")
+            self.text_widget.delete(1.0, tk.END)
+            for field_name in all_fields.keys():
+                self.text_widget.insert(tk.INSERT, f"{field_name}\n")
+            self.text_widget.configure(state="disabled")
+        else:
+            messagebox.showwarning(
+                "No Fields Found", "No form fields found in the selected PDF(s)."
+            )
+
+    def extract_fields(self):
+        if not self.pdf_paths:
+            messagebox.showwarning(
+                "No PDF Selected", "Please select a PDF file or folder first."
+            )
+            return
+
+        if not self.excel_file:
+            messagebox.showwarning(
+                "Excel File Not Open", "Please create an Excel file first."
+            )
+            return
+
+        for pdf_path in self.pdf_paths:
+            self.write_to_excel(pdf_path)
+
+    def create_excel_file(self):
+        if self.excel_file:
+            messagebox.showwarning(
+                "Excel File Already Open",
+                "An Excel file is already open. Please save and close it before creating a new one.",
+            )
+            return
+        self.output_excel_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")]
+        )
+        if not self.output_excel_path:
+            return  # User cancelled the save dialog
+        self.excel_file = pd.ExcelWriter(self.output_excel_path, engine="xlsxwriter")
+        messagebox.showinfo(
+            "Excel File Created", f"Excel file created at {self.output_excel_path}"
+        )
+
+    def save_excel_file(self):
+        if self.excel_file:
+            self.excel_file.close()
+            self.excel_file = None
+            messagebox.showinfo(
+                "Export Successful",
+                f"Data exported successfully to {self.output_excel_path}",
+            )
+        else:
+            messagebox.showwarning(
+                "Excel File Not Open", "There is no Excel file currently open to save."
+            )
+
+    def write_to_excel(self, pdf_path):
+        field_patterns = self.field_entry.get().split(";")
+        pdf_name = os.path.basename(pdf_path)
+        sheet_name = os.path.splitext(pdf_name)[0][
+            :31
+        ]  # Excel sheet names are limited to 31 characters
+
+        fields = extract_pdf_fields(pdf_path)
+        matching_fields = {
+            field: value
+            for field, value in fields.items()
+            if any(
+                fnmatch(field, pattern.replace("%", "*")) for pattern in field_patterns
+            )
+        }
+
+        if matching_fields:
+            df = pd.DataFrame(list(matching_fields.items()), columns=["Field", "Value"])
+            df.to_excel(self.excel_file, sheet_name=sheet_name, index=False)
+            messagebox.showinfo(
+                "Data Written to Excel",
+                f"Data from {pdf_name} written to {self.output_excel_path}",
+            )
+        else:
+            messagebox.showinfo(
+                "No Matching Fields",
+                f"No form fields matched the specified patterns in {pdf_name}.",
+            )
+
+
+def extract_pdf_fields(pdf_path):
+    field_values = {}
+    with open(pdf_path, "rb") as file:
+        reader = PyPDF2.PdfReader(file)
+        fields = reader.get_form_text_fields()
+        if fields:
+            for field_name, field_value in fields.items():
+                field_values[field_name] = field_value
+    return field_values
+
+
+if __name__ == "__main__":
+    app = PDFtoExcelConverter()
+    app.mainloop()
